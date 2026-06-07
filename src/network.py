@@ -29,9 +29,9 @@ def _relu_grad(x: np.ndarray) -> np.ndarray:
 @dataclass
 class NetworkConfig:
     input_size: int = 784
-    hidden_size: int = 64
+    hidden_size: int = 512
     output_size: int = 10
-    learning_rate: float = 0.1
+    learning_rate: float = 0.05
     batch_size: int = 128
     seed: int = 42
 
