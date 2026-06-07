@@ -18,6 +18,14 @@ def _one_hot(labels: np.ndarray, num_classes: int) -> np.ndarray:
     return out
 
 
+def _relu(x: np.ndarray) -> np.ndarray:
+    return np.maximum(0.0, x)
+
+
+def _relu_grad(x: np.ndarray) -> np.ndarray:
+    return (x > 0.0).astype(np.float32)
+
+
 @dataclass
 class NetworkConfig:
     input_size: int = 784
@@ -32,19 +40,22 @@ class SimpleMLP:
     def __init__(self, config: NetworkConfig) -> None:
         self.config = config
         rng = np.random.default_rng(config.seed)
+        scale1 = np.sqrt(2.0 / config.input_size)
+        scale2 = np.sqrt(2.0 / config.hidden_size)
+
         self.params: dict[str, np.ndarray] = {
-            "W1": (rng.standard_normal((config.input_size, config.hidden_size)) * 0.01).astype(
+            "W1": (rng.standard_normal((config.input_size, config.hidden_size)) * scale1).astype(
                 np.float32
             ),
             "b1": np.zeros(config.hidden_size, dtype=np.float32),
-            "W2": (rng.standard_normal((config.hidden_size, config.output_size)) * 0.01).astype(
+            "W2": (rng.standard_normal((config.hidden_size, config.output_size)) * scale2).astype(
                 np.float32
             ),
             "b2": np.zeros(config.output_size, dtype=np.float32),
         }
 
     def predict_proba(self, x: np.ndarray) -> np.ndarray:
-        z1 = np.tanh(np.dot(x, self.params["W1"]) + self.params["b1"])
+        z1 = _relu(np.dot(x, self.params["W1"]) + self.params["b1"])
         logits = np.dot(z1, self.params["W2"]) + self.params["b2"]
         return _softmax(logits)
 
@@ -75,7 +86,7 @@ class SimpleMLP:
             y_batch = y[batch_idx]
 
             z1_linear = np.dot(x_batch, self.params["W1"]) + self.params["b1"]
-            z1 = np.tanh(z1_linear)
+            z1 = _relu(z1_linear)
             logits = np.dot(z1, self.params["W2"]) + self.params["b2"]
             probs = _softmax(logits)
 
@@ -89,7 +100,7 @@ class SimpleMLP:
             db2 = np.sum(d_logits, axis=0)
 
             d_z1 = np.dot(d_logits, self.params["W2"].T)
-            d_z1_linear = d_z1 * (1.0 - np.square(z1))
+            d_z1_linear = d_z1 * _relu_grad(z1_linear)
             dW1 = np.dot(x_batch.T, d_z1_linear)
             db1 = np.sum(d_z1_linear, axis=0)
 
