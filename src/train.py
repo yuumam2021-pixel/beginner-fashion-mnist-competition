@@ -8,7 +8,9 @@ from network import NetworkConfig, SimpleMLP
 
 OUTPUT_PATH = Path("sample_weight.pkl")
 EPOCHS = 60
-HIDDEN_SIZE = 512
+HIDDEN_SIZE = 1024
+HIDDEN_SIZE2 = 512
+
 LEARNING_RATE = 0.1
 BATCH_SIZE = 128
 SEED = 42
@@ -21,6 +23,7 @@ def main() -> int:
         NetworkConfig(
             input_size=x_train.shape[1],
             hidden_size=HIDDEN_SIZE,
+            hidden_size2=HIDDEN_SIZE2,
             output_size=10,
             learning_rate=LEARNING_RATE,
             batch_size=BATCH_SIZE,
