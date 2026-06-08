@@ -30,8 +30,9 @@ def _relu_grad(x: np.ndarray) -> np.ndarray:
 class NetworkConfig:
     input_size: int = 784
     hidden_size: int = 512
+    hidden_size2: int = 512
     output_size: int = 10
-    learning_rate: float = 0.05
+    learning_rate: float = 0.1
     batch_size: int = 128
     seed: int = 42
 
@@ -42,21 +43,27 @@ class SimpleMLP:
         rng = np.random.default_rng(config.seed)
         scale1 = np.sqrt(2.0 / config.input_size)
         scale2 = np.sqrt(2.0 / config.hidden_size)
+        scale3 = np.sqrt(2.0 / config.hidden_size2)
 
         self.params: dict[str, np.ndarray] = {
             "W1": (rng.standard_normal((config.input_size, config.hidden_size)) * scale1).astype(
                 np.float32
             ),
             "b1": np.zeros(config.hidden_size, dtype=np.float32),
-            "W2": (rng.standard_normal((config.hidden_size, config.output_size)) * scale2).astype(
+            "W2": (rng.standard_normal((config.hidden_size, config.hidden_size2)) * scale2).astype(
                 np.float32
             ),
-            "b2": np.zeros(config.output_size, dtype=np.float32),
+            "b2": np.zeros(config.hidden_size2, dtype=np.float32),
+            "W3": (rng.standard_normal((config.hidden_size2, config.output_size)) * scale3).astype(
+                np.float32
+            ),
+            "b3": np.zeros(config.output_size, dtype=np.float32),
         }
 
     def predict_proba(self, x: np.ndarray) -> np.ndarray:
         z1 = _relu(np.dot(x, self.params["W1"]) + self.params["b1"])
-        logits = np.dot(z1, self.params["W2"]) + self.params["b2"]
+        z2 = _relu(np.dot(z1, self.params["W2"]) + self.params["b2"])
+        logits = np.dot(z2, self.params["W3"]) + self.params["b3"]
         return _softmax(logits)
 
     def predict(self, x: np.ndarray) -> np.ndarray:
@@ -87,7 +94,9 @@ class SimpleMLP:
 
             z1_linear = np.dot(x_batch, self.params["W1"]) + self.params["b1"]
             z1 = _relu(z1_linear)
-            logits = np.dot(z1, self.params["W2"]) + self.params["b2"]
+            z2_linear = np.dot(z1, self.params["W2"]) + self.params["b2"]
+            z2 = _relu(z2_linear)
+            logits = np.dot(z2, self.params["W3"]) + self.params["b3"]
             probs = _softmax(logits)
 
             y_one_hot = _one_hot(y_batch, self.config.output_size)
@@ -96,10 +105,15 @@ class SimpleMLP:
             steps += 1
 
             d_logits = (probs - y_one_hot) / x_batch.shape[0]
-            dW2 = np.dot(z1.T, d_logits)
-            db2 = np.sum(d_logits, axis=0)
+            dW3 = np.dot(z2.T, d_logits)
+            db3 = np.sum(d_logits, axis=0)
 
-            d_z1 = np.dot(d_logits, self.params["W2"].T)
+            d_z2 = np.dot(d_logits, self.params["W3"].T)
+            d_z2_linear = d_z2 * _relu_grad(z2_linear)
+            dW2 = np.dot(z1.T, d_z2_linear)
+            db2 = np.sum(d_z2_linear, axis=0)
+
+            d_z1 = np.dot(d_z2_linear, self.params["W2"].T)
             d_z1_linear = d_z1 * _relu_grad(z1_linear)
             dW1 = np.dot(x_batch.T, d_z1_linear)
             db1 = np.sum(d_z1_linear, axis=0)
@@ -109,6 +123,8 @@ class SimpleMLP:
             self.params["b1"] -= lr * db1.astype(np.float32)
             self.params["W2"] -= lr * dW2.astype(np.float32)
             self.params["b2"] -= lr * db2.astype(np.float32)
+            self.params["W3"] -= lr * dW3.astype(np.float32)
+            self.params["b3"] -= lr * db3.astype(np.float32)
 
         return total_loss / max(steps, 1)
 
@@ -118,6 +134,7 @@ class SimpleMLP:
             "config": {
                 "input_size": self.config.input_size,
                 "hidden_size": self.config.hidden_size,
+                "hidden_size2": self.config.hidden_size2,
                 "output_size": self.config.output_size,
                 "learning_rate": self.config.learning_rate,
                 "batch_size": self.config.batch_size,
@@ -136,6 +153,7 @@ class SimpleMLP:
         config = NetworkConfig(
             input_size=int(config_dict["input_size"]),
             hidden_size=int(config_dict["hidden_size"]),
+            hidden_size2=int(config_dict.get("hidden_size2", 512)),
             output_size=int(config_dict["output_size"]),
             learning_rate=float(config_dict.get("learning_rate", 0.1)),
             batch_size=int(config_dict.get("batch_size", 128)),
