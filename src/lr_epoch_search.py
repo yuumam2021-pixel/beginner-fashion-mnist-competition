@@ -22,14 +22,14 @@ def parse_args() -> argparse.Namespace:
         "--learning-rates",
         nargs="+",
         type=float,
-        default=[0.1, 0.05],
+        default=[0.1, 0.05, 0.01],
         help="Learning rates to try",
     )
     parser.add_argument(
         "--epochs",
         nargs="+",
         type=int,
-        default=[60,70,80,90],
+        default=[30,60,90],
         help="Epoch counts to try",
     )
     parser.add_argument("--batch-size", type=int, default=128)

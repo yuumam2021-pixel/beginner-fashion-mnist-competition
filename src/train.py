@@ -10,7 +10,7 @@ OUTPUT_PATH = Path("sample_weight.pkl")
 EPOCHS = 90
 HIDDEN_SIZE = 1024
 HIDDEN_SIZE2 = 512
-LEARNING_RATE = 0.1
+LEARNING_RATE = 0.001
 BATCH_SIZE = 128
 SEED = 42
 
@@ -27,6 +27,7 @@ def main() -> int:
             learning_rate=LEARNING_RATE,
             batch_size=BATCH_SIZE,
             seed=SEED,
+            optimizer="Adam",  # "SGD", "Momentum", "Adam" から選択
         )
     )
 
@@ -36,8 +37,15 @@ def main() -> int:
     print("学習をスタートします！")
 
     # 2. ここでエポック数（学習回数）を決めます！例えば 30 回に増やしてみます
+    # train.py の main関数の中の学習ループ
+
     for epoch in range(max_epochs):
-        # 3. 指定した回数だけ学習を繰り返すループ
+        # 💡 新兵器：30エポックごとに学習率を「半分」にする！
+        if epoch > 0 and epoch % 50== 0:
+            model.optimizer.lr *= 0.5
+            print(f"🌟 学習率を {model.optimizer.lr} に絞りました！より精密に調整します。")
+
+        # --- 以下は今までと同じ ---
         loss = model.train_epoch(x_train, t_train, epoch=epoch)
         train_acc = model.evaluate_accuracy(x_train, t_train)
         valid_acc = model.evaluate_accuracy(x_valid, t_valid)

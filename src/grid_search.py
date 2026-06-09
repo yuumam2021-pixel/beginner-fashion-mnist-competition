@@ -55,7 +55,7 @@ def main() -> int:
     if args.grid:
         grid = parse_grid(args.grid)
     else:
-        grid = [(1024, 512), (512, 256), (256, 128), (128, 64)]
+        grid = [(2048, 1024), (1024, 512), (512, 256), (256, 128), (128, 64)]
 
     (x_train, t_train), (x_valid, t_valid) = load_train_data()
 

@@ -25,6 +25,72 @@ def _relu(x: np.ndarray) -> np.ndarray:
 def _relu_grad(x: np.ndarray) -> np.ndarray:
     return (x > 0.0).astype(np.float32)
 
+class SGD:
+    """確率的勾配降下法（Stochastic Gradient Descent）"""
+    def __init__(self, lr: float = 0.01) -> None:
+        self.lr = lr
+
+    def update(self, params: dict[str, np.ndarray], grads: dict[str, np.ndarray]) -> None:
+        """パラメータと勾配の辞書を受け取り、パラメータを更新する"""
+        for key in params.keys():
+            params[key] -= self.lr * grads[key]
+
+class Momentum:
+    def __init__(self, lr=0.01, momentum=0.9):
+        self.lr = lr
+        self.momentum = momentum
+        self.v = None
+
+    def update(self, params, grads):
+        if self.v is None:
+            self.v = {}
+            for key, val in params.items():
+                self.v[key] = np.zeros_like(val)
+
+        for key in params.keys():
+            self.v[key] = self.momentum*self.v[key] - self.lr*grads[key]
+            params[key] += self.v[key]
+
+class Adam:
+    """Adam（PyTorch完全互換バージョン + Weight Decay対応）"""
+    # 💡 1. __init__ に weight_decay を追加（標準的な強さである 1e-4 をデフォルトにします）
+    def __init__(self, lr: float = 0.001, beta1: float = 0.9, beta2: float = 0.999, weight_decay: float = 0) -> None:
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.weight_decay = weight_decay  # 追加！
+        self.iter = 0
+        self.m: dict[str, np.ndarray] | None = None
+        self.v: dict[str, np.ndarray] | None = None
+
+    def update(self, params: dict[str, np.ndarray], grads: dict[str, np.ndarray]) -> None:
+        if self.m is None:
+            self.m, self.v = {}, {}
+            for key, val in params.items():
+                self.m[key] = np.zeros_like(val)
+                self.v[key] = np.zeros_like(val)
+
+        self.iter += 1
+
+        for key in params.keys():
+            # 💡 2. ここが Weight Decay の追加部分！
+            # バイアス(b)にはペナルティをかけず、重み(W)にだけペナルティ（重み自身 × weight_decay）を勾配に足します
+            if key.startswith("W"):
+                grad = grads[key] + self.weight_decay * params[key]
+            else:
+                grad = grads[key]
+
+            # 💡 3. 以降は grads[key] の代わりに、上で計算した grad を使って計算します
+            # 1. 勢い(m)と勾配の2乗(v)を更新
+            self.m[key] = self.beta1 * self.m[key] + (1 - self.beta1) * grad
+            self.v[key] = self.beta2 * self.v[key] + (1 - self.beta2) * (grad ** 2)
+
+            # 2. バイアス補正（PyTorchと全く同じ手順）
+            m_hat = self.m[key] / (1 - self.beta1 ** self.iter)
+            v_hat = self.v[key] / (1 - self.beta2 ** self.iter)
+
+            # 3. パラメータの更新 (1e-8はPyTorchの標準値)
+            params[key] -= self.lr * m_hat / (np.sqrt(v_hat) + 1e-8)
 
 @dataclass
 class NetworkConfig:
@@ -32,9 +98,10 @@ class NetworkConfig:
     hidden_size: int = 1024
     hidden_size2: int = 512
     output_size: int = 10
-    learning_rate: float = 0.1
+    learning_rate: float = 0.001
     batch_size: int = 128
     seed: int = 42
+    optimizer: str = "Adam"  # "SGD", "Momentum", "Adam" から選択
 
 
 class SimpleMLP:
@@ -59,6 +126,18 @@ class SimpleMLP:
             ),
             "b3": np.zeros(config.output_size, dtype=np.float32),
         }
+       # network.py の SimpleMLP クラスの __init__ 部分
+
+        # 💡 ここを以下のように修正して Adam の選択肢を増やします！
+        optimizer_name = config.optimizer.lower()
+        if optimizer_name == "adam":
+            self.optimizer = Adam(lr=config.learning_rate)
+        elif optimizer_name == "sgd":
+            self.optimizer = SGD(lr=config.learning_rate)
+        elif optimizer_name == "momentum":
+            self.optimizer = Momentum(lr=config.learning_rate, momentum=0.9)
+        else:
+            raise ValueError(f"Unknown optimizer: {config.optimizer}")
 
     def predict_proba(self, x: np.ndarray) -> np.ndarray:
         z1 = _relu(np.dot(x, self.params["W1"]) + self.params["b1"])
@@ -118,13 +197,19 @@ class SimpleMLP:
             dW1 = np.dot(x_batch.T, d_z1_linear)
             db1 = np.sum(d_z1_linear, axis=0)
 
-            lr = self.config.learning_rate
-            self.params["W1"] -= lr * dW1.astype(np.float32)
-            self.params["b1"] -= lr * db1.astype(np.float32)
-            self.params["W2"] -= lr * dW2.astype(np.float32)
-            self.params["b2"] -= lr * db2.astype(np.float32)
-            self.params["W3"] -= lr * dW3.astype(np.float32)
-            self.params["b3"] -= lr * db3.astype(np.float32)
+            # 💡 --- パラメータの更新（Optimizerに任せる！） ---
+            # 1. 計算した勾配を辞書にまとめる
+            grads = {
+                "W1": dW1.astype(np.float32),
+                "b1": db1.astype(np.float32),
+                "W2": dW2.astype(np.float32),
+                "b2": db2.astype(np.float32),
+                "W3": dW3.astype(np.float32),
+                "b3": db3.astype(np.float32),
+            }
+            
+            # 2. Optimizerに「今のパラメータ」と「勾配」を渡して更新してもらう
+            self.optimizer.update(self.params, grads)
 
         return total_loss / max(steps, 1)
 
