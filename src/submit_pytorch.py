@@ -5,7 +5,9 @@ from pathlib import Path
 from load_fashion_mnist import load_test_data
 from train_pytorch import DeepCNN  # 💡 最強になった DeepCNN を読み込む
 
-WEIGHTS_PATH = Path("pytorch_model.pth")
+WEIGHTS_PATH = Path("sample_weight.pkl")
+model = DeepCNN()
+model.load_state_dict(torch.load(WEIGHTS_PATH))
 
 def main() -> int:
     if not WEIGHTS_PATH.exists():

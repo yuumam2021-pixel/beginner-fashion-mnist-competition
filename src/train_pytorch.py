@@ -109,8 +109,8 @@ def main():
 
     print("学習が完了しました！")
     # 💡 新しい最強モデルを保存
-    torch.save(model.state_dict(), "pytorch_model.pth")
-    print("モデルを pytorch_model.pth に保存しました！")
+    torch.save(model.state_dict(), "sample_weight.pkl")
+    print("モデルを sample_weight.pkl に保存しました！")
 
 if __name__ == "__main__":
     main()
