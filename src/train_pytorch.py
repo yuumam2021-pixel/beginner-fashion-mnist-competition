@@ -6,61 +6,69 @@ from torch.utils.data import DataLoader, TensorDataset
 from load_fashion_mnist import load_train_data
 
 # ==========================================
-# 1. 究極進化：VGGスタイル4層CNNモデル
+# 1. 超高速・高精度モデル：Fast ResNet (ResNet-9スタイル)
 # ==========================================
-class VGGStyle4LayerCNN(nn.Module):
+class FastResNet(nn.Module):
     def __init__(self):
         super().__init__()
         
-        # 💡 【ブロック1】 画像サイズ 28x28 のまま、2回連続で畳み込み！
-        # 1層目: 1 -> 32チャンネル
+        # 【準備層】 28x28 のまま特徴を抽出
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         
-        # 2層目: 32 -> 32チャンネル（さらに深く特徴を抽出）
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(32)
+        # 【層1】 14x14 に縮小
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.pool1 = nn.MaxPool2d(2, 2)
         
-        # ここで初めてサイズを半分にする（28x28 -> 14x14）
-        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        # 💡 【スキップ構造 1】 14x14のまま、近道を使って深く学習
+        self.res1_conv1 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.res1_bn1 = nn.BatchNorm2d(64)
+        self.res1_conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.res1_bn2 = nn.BatchNorm2d(64)
         
+        # 【層2】 7x7 に縮小
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.pool2 = nn.MaxPool2d(2, 2)
         
-        # 💡 【ブロック2】 画像サイズ 14x14 のまま、さらに2回連続で畳み込み！
-        # 3層目: 32 -> 64チャンネル
-        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(64)
+        # 💡 【スキップ構造 2】 7x7のまま、近道を使ってさらに深く学習
+        self.res2_conv1 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.res2_bn1 = nn.BatchNorm2d(128)
+        self.res2_conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.res2_bn2 = nn.BatchNorm2d(128)
         
-        # 4層目: 64 -> 64チャンネル
-        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(64)
-        
-        # ここでサイズを半分にする（14x14 -> 7x7）
-        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        
-        
-        # 💡 全結合層（64チャンネル × 7マス × 7マス = 3136）
-        self.fc1 = nn.Linear(64 * 7 * 7, 256)
-        self.bn_fc1 = nn.BatchNorm1d(256)
-        self.fc2 = nn.Linear(256, 10)
-        self.dropout = nn.Dropout(p=0.4) # 過学習防止のお守り
+        # 【仕上げ】 空間情報（7x7）を維持したまま全結合層へ
+        self.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(0.3),
+            nn.Linear(128 * 7 * 7, 256),
+            nn.ReLU(),
+            nn.Linear(256, 10)
+        )
 
     def forward(self, x):
-        # ブロック1の処理
+        # 準備
         x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = self.pool1(x)
         
-        # ブロック2の処理
-        x = F.relu(self.bn3(self.conv3(x)))
-        x = F.relu(self.bn4(self.conv4(x)))
-        x = self.pool2(x)
+        # 層1
+        x = self.pool1(F.relu(self.bn2(self.conv2(x))))
         
-        # 1列に平坦化して全結合層へ
-        x = x.view(-1, 64 * 7 * 7)
-        x = F.relu(self.bn_fc1(self.fc1(x)))
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
+        # スキップ構造1（足し算！）
+        r = F.relu(self.res1_bn1(self.res1_conv1(x)))
+        x = x + self.res1_bn2(self.res1_conv2(r))
+        x = F.relu(x)
+        
+        # 層2
+        x = self.pool2(F.relu(self.bn3(self.conv3(x))))
+        
+        # スキップ構造2（足し算！）
+        r = F.relu(self.res2_bn1(self.res2_conv1(x)))
+        x = x + self.res2_bn2(self.res2_conv2(r))
+        x = F.relu(x)
+        
+        # 分類
+        return self.classifier(x)
 
 # ==========================================
 # 2. 学習メイン処理
@@ -76,26 +84,27 @@ def main():
     train_dataset = TensorDataset(x_train, t_train)
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
 
-    # 💡 モデルを VGGStyle4LayerCNN に設定
-    model = VGGStyle4LayerCNN()
+    # 💡 モデルを FastResNet に変更
+    model = FastResNet()
     criterion = nn.CrossEntropyLoss()
+    
+    # 💡 最も安定して速い通常の Adam に戻す
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     
-    # 8エポックごとに学習率を0.6倍にして、終盤の精度を微調整
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=8, gamma=0.6)
+    # スケジューラー（10エポックごとに0.5倍）
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
-    epochs = 35
-    print("限界突破：VGGスタイル4層CNNの学習をスタートします！")
+    epochs = 30 # 爆速なのでサクサク進みます
+    print("限界突破：超高速 Fast ResNet の学習をスタートします！")
 
     for epoch in range(epochs):
-        model.train()  # 学習モード
+        model.train()
         running_loss = 0.0
         correct_train = 0
         total_train = 0
 
         for images, labels in train_loader:
-            
-            # 💡 データ拡張：50%の確率で左右反転
+            # データ拡張（左右反転）は精度向上に効くので残します
             if torch.rand(1).item() > 0.5:
                 images = torch.flip(images, dims=[3])
 
@@ -111,12 +120,10 @@ def main():
             correct_train += (predicted == labels).sum().item()
 
         scheduler.step()
-
         epoch_loss = running_loss / len(train_loader.dataset)
         train_acc = correct_train / total_train
 
-        # 検証データでの精度評価
-        model.eval()  # 評価モード
+        model.eval()
         correct_valid = 0
         total_valid = 0
         with torch.no_grad():
@@ -130,10 +137,8 @@ def main():
         print(f"Epoch {epoch+1:02d} | Loss: {epoch_loss:.4f} | Train Acc: {train_acc:.4f} | Valid Acc: {valid_acc:.4f}")
 
     print("学習が完了しました！")
-    # 💡 システム指定通り sample_weight.pkl に保存
     torch.save(model.state_dict(), "sample_weight.pkl")
     print("モデルを sample_weight.pkl に保存しました！")
-
 
 if __name__ == "__main__":
     main()

@@ -8,7 +8,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-BASE_URL = "http://fashion-mnist.s3-website.eu-central-1.amazonaws.com"
+BASE_URL = "https://github.com/zalandoresearch/fashion-mnist/raw/master/data/fashion/"
 FILES = {
     "train-images-idx3-ubyte.gz": "8d4fb7e6c68d591d4c3dfef9ec88bf0d",
     "train-labels-idx1-ubyte.gz": "25c81989df183df01b3e8a0aad5dffbe",

@@ -3,7 +3,7 @@
 import torch
 from pathlib import Path
 from load_fashion_mnist import load_test_data
-from train_pytorch import VGGStyle4LayerCNN as DeepCNN  # 💡 最強になった DeepCNN を読み込む
+from train_pytorch import FastResNet as DeepCNN  # 💡 最強になった DeepCNN を読み込む
 
 WEIGHTS_PATH = Path("sample_weight.pkl")
 model = DeepCNN()
