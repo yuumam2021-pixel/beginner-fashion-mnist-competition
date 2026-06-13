@@ -1,56 +1,64 @@
 import torch
 from pathlib import Path
 from load_fashion_mnist import load_test_data
-# 💡 ここを SuperResNet に修正！
-from train_pytorch import SuperResNet as DeepCNN
-
-WEIGHTS_PATH = Path("sample_weight.pkl")
+from train_pytorch import SuperResNet
 
 def main() -> int:
-    if not WEIGHTS_PATH.exists():
-        print(f"[ERROR] weights file not found: {WEIGHTS_PATH}")
-        return 1
-
-    # # 1. テストデータの読み込み
+    NUM_MODELS = 3
+    
+    # 1. テストデータの読み込み
     x_test_np, t_test_np = load_test_data()
-
-    # # 2. NumPyデータをPyTorchテンソルに変換 & 28x28に変形
     x_test = torch.from_numpy(x_test_np).view(-1, 1, 28, 28).float()
     t_test = torch.from_numpy(t_test_np).long()
 
-    # # 3. モデルを準備して重みを流し込む
-    model = DeepCNN()
-    # CPU環境でも読み込めるように map_location を追加しておくと安全です
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.load_state_dict(torch.load(WEIGHTS_PATH, map_location=device))
-    model.to(device)
-    model.eval() # 💡 テストモードに切り替え（重要！）
+    x_test = x_test.to(device)
+    t_test = t_test.to(device)
 
-    # # 4. 予測を実行
-    print("テストデータで予測を計算中...")
-    correct = 0
-    total = 0
+    # 2. 3つのモデルをすべて準備して読み込む
+    models = []
+    for i in range(NUM_MODELS):
+        weight_path = Path(f"sample_weight_{i}.pkl")
+        if not weight_path.exists():
+            print(f"[ERROR] weights file not found: {weight_path}")
+            return 1
+            
+        model = SuperResNet()
+        model.load_state_dict(torch.load(weight_path, map_location=device))
+        model.to(device)
+        model.eval()
+        models.append(model)
+        print(f"✅ モデル {i+1} ({weight_path}) を読み込みました。")
+
+    # 3. アンサンブル予測を実行
+    print("🔥 3つのモデルによるアンサンブル予測を計算中...")
     
     with torch.no_grad():
-        # GPUが使えるならデータをGPUに送る
-        images = x_test.to(device)
-        labels = t_test.to(device)
+        # 全モデルの予測結果（確率）を足し合わせるための空っぽのテンソル
+        ensemble_outputs = torch.zeros((x_test.size(0), 10)).to(device)
         
-        # 予測（TTA: 左右反転も合わせてアンサンブルするとさらに精度が上がります）
-        outputs_orig = model(images)
-        outputs_flipped = model(torch.flip(images, dims=[3]))
-        outputs = (outputs_orig + outputs_flipped) / 2.0
+        for model in models:
+            # 各モデルでオリジナル画像 ＋ 左右反転画像（TTA）の予測を出す
+            out_orig = model(x_test)
+            out_flip = model(torch.flip(x_test, dims=[3]))
+            model_output = (out_orig + out_flip) / 2.0
+            
+            # アンサンブル用に足し合わせる
+            ensemble_outputs += model_output
+            
+        # 足し合わせたものをモデルの数(3)で割って平均を出す
+        ensemble_outputs /= NUM_MODELS
         
-        _, predicted = torch.max(outputs, 1)
+        # 最終的な答えを決める
+        _, predicted = torch.max(ensemble_outputs, 1)
         
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        # 精度の計算
+        correct = (predicted == t_test).sum().item()
+        total = t_test.size(0)
 
-    # # 5. 精度の計算
     test_acc = correct / total
-    print(f"✨ テストデータの正解率 (Test Acc): {test_acc:.4f}")
+    print(f"\n👑 【最終結果】 アンサンブル テスト正解率 (Test Acc): {test_acc:.4f} 👑")
     
-    # ここで提出用のCSV等を作る処理があれば、ここ以降に続きます
     return 0
 
 if __name__ == "__main__":
