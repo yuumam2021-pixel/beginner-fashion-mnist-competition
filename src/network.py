@@ -25,6 +25,10 @@ def _relu(x: np.ndarray) -> np.ndarray:
 def _relu_grad(x: np.ndarray) -> np.ndarray:
     return (x > 0.0).astype(np.float32)
 
+
+# ==========================================
+# オプティマイザの実装
+# ==========================================
 class SGD:
     """確率的勾配降下法（Stochastic Gradient Descent）"""
     def __init__(self, lr: float = 0.01) -> None:
@@ -34,6 +38,7 @@ class SGD:
         """パラメータと勾配の辞書を受け取り、パラメータを更新する"""
         for key in params.keys():
             params[key] -= self.lr * grads[key]
+
 
 class Momentum:
     def __init__(self, lr=0.01, momentum=0.9):
@@ -48,17 +53,17 @@ class Momentum:
                 self.v[key] = np.zeros_like(val)
 
         for key in params.keys():
-            self.v[key] = self.momentum*self.v[key] - self.lr*grads[key]
+            self.v[key] = self.momentum * self.v[key] - self.lr * grads[key]
             params[key] += self.v[key]
+
 
 class Adam:
     """Adam（PyTorch完全互換バージョン + Weight Decay対応）"""
-    # 💡 1. __init__ に weight_decay を追加（標準的な強さである 1e-4 をデフォルトにします）
-    def __init__(self, lr: float = 0.001, beta1: float = 0.9, beta2: float = 0.999, weight_decay: float = 0) -> None:
+    def __init__(self, lr: float = 0.001, beta1: float = 0.9, beta2: float = 0.999, weight_decay: float = 0.0) -> None:
         self.lr = lr
         self.beta1 = beta1
         self.beta2 = beta2
-        self.weight_decay = weight_decay  # 追加！
+        self.weight_decay = weight_decay
         self.iter = 0
         self.m: dict[str, np.ndarray] | None = None
         self.v: dict[str, np.ndarray] | None = None
@@ -73,25 +78,27 @@ class Adam:
         self.iter += 1
 
         for key in params.keys():
-            # 💡 2. ここが Weight Decay の追加部分！
-            # バイアス(b)にはペナルティをかけず、重み(W)にだけペナルティ（重み自身 × weight_decay）を勾配に足します
+            # バイアス(b)にはペナルティをかけず、重み(W)にだけペナルティを勾配に足す
             if key.startswith("W"):
                 grad = grads[key] + self.weight_decay * params[key]
             else:
                 grad = grads[key]
 
-            # 💡 3. 以降は grads[key] の代わりに、上で計算した grad を使って計算します
-            # 1. 勢い(m)と勾配の2乗(v)を更新
+            # 勢い(m)と勾配の2乗(v)を更新
             self.m[key] = self.beta1 * self.m[key] + (1 - self.beta1) * grad
             self.v[key] = self.beta2 * self.v[key] + (1 - self.beta2) * (grad ** 2)
 
-            # 2. バイアス補正（PyTorchと全く同じ手順）
+            # バイアス補正
             m_hat = self.m[key] / (1 - self.beta1 ** self.iter)
             v_hat = self.v[key] / (1 - self.beta2 ** self.iter)
 
-            # 3. パラメータの更新 (1e-8はPyTorchの標準値)
+            # パラメータの更新
             params[key] -= self.lr * m_hat / (np.sqrt(v_hat) + 1e-8)
 
+
+# ==========================================
+# ネットワーク設定とモデルの実装
+# ==========================================
 @dataclass
 class NetworkConfig:
     input_size: int = 784
@@ -101,37 +108,33 @@ class NetworkConfig:
     learning_rate: float = 0.001
     batch_size: int = 128
     seed: int = 42
-    optimizer: str = "Adam"  # "SGD", "Momentum", "Adam" から選択
+    optimizer: str = "Adam"        # "SGD", "Momentum", "Adam" から選択
+    weight_decay: float = 0.0001   # Weight Decayの強さ（追加）
 
 
 class SimpleMLP:
     def __init__(self, config: NetworkConfig) -> None:
         self.config = config
         rng = np.random.default_rng(config.seed)
+        
+        # Heの初期値（ReLUと相性が良いスケーリング）
         scale1 = np.sqrt(2.0 / config.input_size)
         scale2 = np.sqrt(2.0 / config.hidden_size)
         scale3 = np.sqrt(2.0 / config.hidden_size2)
 
         self.params: dict[str, np.ndarray] = {
-            "W1": (rng.standard_normal((config.input_size, config.hidden_size)) * scale1).astype(
-                np.float32
-            ),
+            "W1": (rng.standard_normal((config.input_size, config.hidden_size)) * scale1).astype(np.float32),
             "b1": np.zeros(config.hidden_size, dtype=np.float32),
-            "W2": (rng.standard_normal((config.hidden_size, config.hidden_size2)) * scale2).astype(
-                np.float32
-            ),
+            "W2": (rng.standard_normal((config.hidden_size, config.hidden_size2)) * scale2).astype(np.float32),
             "b2": np.zeros(config.hidden_size2, dtype=np.float32),
-            "W3": (rng.standard_normal((config.hidden_size2, config.output_size)) * scale3).astype(
-                np.float32
-            ),
+            "W3": (rng.standard_normal((config.hidden_size2, config.output_size)) * scale3).astype(np.float32),
             "b3": np.zeros(config.output_size, dtype=np.float32),
         }
-       # network.py の SimpleMLP クラスの __init__ 部分
 
-        # 💡 ここを以下のように修正して Adam の選択肢を増やします！
+        # Optimizerの初期化（Configから設定を読み込む）
         optimizer_name = config.optimizer.lower()
         if optimizer_name == "adam":
-            self.optimizer = Adam(lr=config.learning_rate)
+            self.optimizer = Adam(lr=config.learning_rate, weight_decay=config.weight_decay)
         elif optimizer_name == "sgd":
             self.optimizer = SGD(lr=config.learning_rate)
         elif optimizer_name == "momentum":
@@ -171,6 +174,7 @@ class SimpleMLP:
             x_batch = x[batch_idx]
             y_batch = y[batch_idx]
 
+            # 順伝播 (Forward)
             z1_linear = np.dot(x_batch, self.params["W1"]) + self.params["b1"]
             z1 = _relu(z1_linear)
             z2_linear = np.dot(z1, self.params["W2"]) + self.params["b2"]
@@ -178,11 +182,13 @@ class SimpleMLP:
             logits = np.dot(z2, self.params["W3"]) + self.params["b3"]
             probs = _softmax(logits)
 
+            # 損失計算 (Loss)
             y_one_hot = _one_hot(y_batch, self.config.output_size)
             loss = -np.mean(np.sum(y_one_hot * np.log(probs + 1e-8), axis=1))
             total_loss += float(loss)
             steps += 1
 
+            # 逆伝播 (Backward)
             d_logits = (probs - y_one_hot) / x_batch.shape[0]
             dW3 = np.dot(z2.T, d_logits)
             db3 = np.sum(d_logits, axis=0)
@@ -197,8 +203,7 @@ class SimpleMLP:
             dW1 = np.dot(x_batch.T, d_z1_linear)
             db1 = np.sum(d_z1_linear, axis=0)
 
-            # 💡 --- パラメータの更新（Optimizerに任せる！） ---
-            # 1. 計算した勾配を辞書にまとめる
+            # 勾配を辞書にまとめる
             grads = {
                 "W1": dW1.astype(np.float32),
                 "b1": db1.astype(np.float32),
@@ -208,12 +213,13 @@ class SimpleMLP:
                 "b3": db3.astype(np.float32),
             }
             
-            # 2. Optimizerに「今のパラメータ」と「勾配」を渡して更新してもらう
+            # オプティマイザによるパラメータ更新
             self.optimizer.update(self.params, grads)
 
         return total_loss / max(steps, 1)
 
     def to_state(self) -> dict[str, object]:
+        """モデルの状態（設定と重み）を保存用の辞書にする"""
         return {
             "model_type": "SimpleMLP",
             "config": {
@@ -224,12 +230,15 @@ class SimpleMLP:
                 "learning_rate": self.config.learning_rate,
                 "batch_size": self.config.batch_size,
                 "seed": self.config.seed,
+                "optimizer": self.config.optimizer,          # 追加：オプティマイザの種類
+                "weight_decay": self.config.weight_decay,    # 追加：Weight Decayの強さ
             },
             "params": self.params,
         }
 
     @classmethod
     def from_state(cls, state: dict[str, object]) -> "SimpleMLP":
+        """保存された辞書からモデルを復元する"""
         config_obj = state.get("config")
         if not isinstance(config_obj, dict):
             raise ValueError("Invalid state: 'config' must be a dict")
@@ -240,9 +249,11 @@ class SimpleMLP:
             hidden_size=int(config_dict["hidden_size"]),
             hidden_size2=int(config_dict.get("hidden_size2", 512)),
             output_size=int(config_dict["output_size"]),
-            learning_rate=float(config_dict.get("learning_rate", 0.1)),
+            learning_rate=float(config_dict.get("learning_rate", 0.001)),
             batch_size=int(config_dict.get("batch_size", 128)),
             seed=int(config_dict.get("seed", 42)),
+            optimizer=str(config_dict.get("optimizer", "Adam")),               # 復元時に追加
+            weight_decay=float(config_dict.get("weight_decay", 0.0001)),       # 復元時に追加
         )
 
         params_obj = state.get("params")

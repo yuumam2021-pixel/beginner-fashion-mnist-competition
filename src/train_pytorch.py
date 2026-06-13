@@ -2,43 +2,69 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as T
 from load_fashion_mnist import load_train_data
 
 # ==========================================
-# 1. 超高速・高精度モデル：Fast ResNet (ResNet-9スタイル)
+# 0. カスタムデータセット（強力なデータ拡張を使うため）
+# ==========================================
+class FashionMNISTDataset(Dataset):
+    def __init__(self, x_np, t_np, transform=None):
+        # Numpy配列をPyTorchのTensorに変換
+        self.x = torch.from_numpy(x_np).view(-1, 1, 28, 28).float()
+        self.t = torch.from_numpy(t_np).long()
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        img = self.x[idx]
+        label = self.t[idx]
+        if self.transform:
+            img = self.transform(img)
+        return img, label
+
+# ==========================================
+# 1. 超高速・高精度モデル：Fast ResNet
 # ==========================================
 class FastResNet(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=10):
         super().__init__()
         
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        # 準備層
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(32)
         
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        # 第1層 (縮小)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(64)
         self.pool1 = nn.MaxPool2d(2, 2)
         
-        self.res1_conv1 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        # スキップ構造1
+        self.res1_conv1 = nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False)
         self.res1_bn1 = nn.BatchNorm2d(64)
-        self.res1_conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.res1_conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False)
         self.res1_bn2 = nn.BatchNorm2d(64)
         
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        # 第2層 (縮小)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1, bias=False)
         self.bn3 = nn.BatchNorm2d(128)
         self.pool2 = nn.MaxPool2d(2, 2)
         
-        self.res2_conv1 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        # スキップ構造2
+        self.res2_conv1 = nn.Conv2d(128, 128, kernel_size=3, padding=1, bias=False)
         self.res2_bn1 = nn.BatchNorm2d(128)
-        self.res2_conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.res2_conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1, bias=False)
         self.res2_bn2 = nn.BatchNorm2d(128)
         
+        # 仕上げ (GAPを使ってパラメータ削減＆過学習防止)
+        self.gap = nn.AdaptiveAvgPool2d(1)
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Dropout(0.3),
-            nn.Linear(128 * 7 * 7, 256),
-            nn.ReLU(),
-            nn.Linear(256, 10)
+            nn.Linear(128, num_classes)
         )
 
     def forward(self, x):
@@ -55,47 +81,54 @@ class FastResNet(nn.Module):
         x = x + self.res2_bn2(self.res2_conv2(r))
         x = F.relu(x)
         
+        x = self.gap(x)
         return self.classifier(x)
 
 # ==========================================
-# 2. 学習メイン処理 (GPU + TTA対応版)
+# 2. 学習メイン処理 (全部盛り版)
 # ==========================================
 def main():
+    print("データを読み込んでいます...")
     (x_train_np, t_train_np), (x_valid_np, t_valid_np) = load_train_data()
 
-    x_train = torch.from_numpy(x_train_np).view(-1, 1, 28, 28).float()
-    t_train = torch.from_numpy(t_train_np).long()
+    # 💡 秘伝のタレ2：訓練用の強力なデータ拡張（少しパディングしてランダムに切り取る ＋ 左右反転）
+    train_transform = T.Compose([
+        T.RandomCrop(28, padding=4),
+        T.RandomHorizontalFlip(p=0.5),
+    ])
+
+    train_dataset = FashionMNISTDataset(x_train_np, t_train_np, transform=train_transform)
+    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=2, pin_memory=True)
+
+    # 検証データはTensorDatasetのまま（データ拡張しないため）
     x_valid = torch.from_numpy(x_valid_np).view(-1, 1, 28, 28).float()
     t_valid = torch.from_numpy(t_valid_np).long()
-
-    train_dataset = TensorDataset(x_train, t_train)
-    train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🔥 使用するデバイス: {device}")
 
     model = FastResNet().to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
+    
+    # 💡 秘伝のタレ5：ラベルスムージング（正解を100%ではなく90%として学習させ、過学習を防ぐ）
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    
+    # 💡 秘伝のタレ3：AdamW（通常のAdamより過学習に強い）
+    optimizer = optim.AdamW(model.parameters(), lr=0.003, weight_decay=0.01)
+    
+    epochs = 40 # 少し長めに回します
+    
+    # 💡 秘伝のタレ4：Cosine Annealing（学習率をコサインカーブのように滑らかに下げる）
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    epochs = 60
-    print("限界突破：Fast ResNet + TTA の学習をスタートします！")
+    print("限界突破：最高精度を狙うフルカスタム学習をスタートします！")
 
     for epoch in range(epochs):
-        # -----------------------------
-        # 訓練モード
-        # -----------------------------
         model.train()
         running_loss = 0.0
         correct_train = 0
         total_train = 0
 
         for images, labels in train_loader:
-            # 学習時のデータ拡張（左右反転）
-            if torch.rand(1).item() > 0.5:
-                images = torch.flip(images, dims=[3])
-
             images = images.to(device)
             labels = labels.to(device)
 
@@ -115,7 +148,7 @@ def main():
         train_acc = correct_train / total_train
 
         # -----------------------------
-        # 検証モード（💡 TTAの実装箇所）
+        # 検証モード（TTAの実装）
         # -----------------------------
         model.eval()
         correct_valid = 0
@@ -124,17 +157,16 @@ def main():
             images_valid = x_valid.to(device)
             labels_valid_gpu = t_valid.to(device)
             
-            # 💡 TTA 1：オリジナルの画像で予測スコアを出す
+            # TTA 1：オリジナルの画像
             outputs_orig = model(images_valid)
             
-            # 💡 TTA 2：左右反転させた画像を作って、予測スコアを出す
+            # TTA 2：左右反転画像
             images_flipped = torch.flip(images_valid, dims=[3])
             outputs_flipped = model(images_flipped)
             
-            # 💡 TTA 3：両方の予測スコアを足して平均をとる（アンサンブル効果）
+            # TTA 3：アンサンブル（平均）
             outputs_final = (outputs_orig + outputs_flipped) / 2.0
             
-            # 平均したスコアから最終的な予測ラベルを決定する
             _, predicted_valid = torch.max(outputs_final, 1)
             total_valid += labels_valid_gpu.size(0)
             correct_valid += (predicted_valid == labels_valid_gpu).sum().item()
